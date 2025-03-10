@@ -178,7 +178,7 @@ class RequestExecutor:
 
 class UserSession:
 
-    def __init__(self, user_config: UserConfig, use_sharegpt=False, sharegpt_data=None):
+    def __init__(self, user_config: UserConfig, use_sharegpt=False, sharegpt_data=None, routing_strategy="random"):
         self.user_config = user_config
         self.last_request_time = None
         self.chat_history = ChatHistory()
@@ -202,6 +202,7 @@ class UserSession:
         self.finish_times = []
 
         self.finished = False
+        self.routing_strategy = routing_strategy
 
     def _update_result(self, response: Response):
         self.prompt_lengths.append(response.prompt_tokens)
@@ -267,7 +268,7 @@ class UserSession:
             self.chat_history,
             max_tokens,
             self._on_request_finished,
-            extra_headers={"x-user-id": str(self.user_config.user_id)},
+            extra_headers={"x-user-id": str(self.user_config.user_id), "routing-strategy": self.routing_strategy},
         )
         self.has_unfinished_request = True
         self.last_request_time = timestamp
@@ -341,7 +342,7 @@ class UserSession:
 class UserSessionManager:
 
     def __init__(
-        self, workload_config: WorkloadConfig, init_user_id=0, use_sharegpt=False
+        self, workload_config: WorkloadConfig, init_user_id=0, use_sharegpt=False, routing_strategy="random"
     ):
         self.workload_config = workload_config
         self.sessions = []
@@ -370,6 +371,8 @@ class UserSessionManager:
         if self.use_sharegpt:
             self._load_sharegpt_data()
 
+        self.routing_strategy = routing_strategy
+
     def _load_sharegpt_data(self):
         with open("ShareGPT.json", "r", encoding="utf-8") as file:
             self.sharegpt_data = json.load(file)
@@ -394,10 +397,10 @@ class UserSessionManager:
         user_config = UserConfig.new_user_config(self.user_id, self.workload_config)
         if self.use_sharegpt:
             user_session = UserSession(
-                user_config, self.use_sharegpt, self.sharegpt_data[self.user_id]
+                user_config, self.use_sharegpt, self.sharegpt_data[self.user_id], self.routing_strategy
             )
         else:
-            user_session = UserSession(user_config, self.use_sharegpt)
+            user_session = UserSession(user_config, self.use_sharegpt, self.routing_strategy)
         self.sessions.append(user_session)
         return user_session
 
@@ -419,6 +422,7 @@ class UserSessionManager:
         if self.start_time is None:
             self.start_time = timestamp
 
+        ## Original
         if timestamp - self.last_user_join > self.gap_between_users:
             self._create_user_session()
             self.last_user_join = timestamp
@@ -426,6 +430,14 @@ class UserSessionManager:
                 f"Joined a new user {self.user_id}, "
                 f"now active users: {len(self.sessions)}"
             )
+
+        # if timestamp - self.last_user_join > self.gap_between_users and len(self.sessions) < self.workload_config.num_users:
+        #     self._create_user_session()
+        #     self.last_user_join = timestamp
+        #     logger.info(
+        #         f"Joined a new user {self.user_id}, "
+        #         f"now active users: {len(self.sessions)}"
+        #     )
 
         for session in self.sessions:
             session.step(timestamp, executor)
@@ -618,6 +630,9 @@ def parse_arguments() -> WorkloadConfig:
     parser.add_argument(
         "--sharegpt", action="store_true", help="Whether to use ShareGPT dataset"
     )
+    parser.add_argument(
+        "--routing-strategy", type=str, help="Specify routing strategy for AIBrix gateway (default: random)", default="random"
+    )
     args = parser.parse_args()
     return args
 
@@ -655,7 +670,7 @@ def main():
     step_interval = 0.1
 
     executor = RequestExecutor(
-        base_url=args.base_url, api_key="EMPTY", model=args.model
+        base_url=args.base_url, api_key="sk-kFJ12nKsFVfVmGpj3QzX65s4RbN2xJqWzPYCjYu7wT3BlbLi", model=args.model
     )
 
     warmup_engine(executor)
@@ -671,7 +686,7 @@ def main():
     )
 
     manager = UserSessionManager(
-        workload_config, init_user_id=args.init_user_id, use_sharegpt=args.sharegpt
+        workload_config, init_user_id=args.init_user_id, use_sharegpt=args.sharegpt, routing_strategy=args.routing_strategy
     )
 
     num_steps = 0
